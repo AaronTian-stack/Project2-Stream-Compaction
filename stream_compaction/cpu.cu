@@ -1,6 +1,9 @@
 #include <cstdio>
 #include "cpu.h"
 
+#include <cassert>
+#include <vector>
+
 #include "common.h"
 
 namespace StreamCompaction {
@@ -18,8 +21,13 @@ namespace StreamCompaction {
          * (Optional) For better understanding before starting moving to GPU, you can simulate your GPU scan in this function first.
          */
         void scan(int n, int *odata, const int *idata) {
+            assert(n > 0);
             timer().startCpuTimer();
-            // TODO
+            odata[0] = 0;
+            for (int i = 1; i < n; i++)
+            {
+                odata[i] = idata[i - 1] + odata[i - 1];
+            }
             timer().endCpuTimer();
         }
 
@@ -30,9 +38,16 @@ namespace StreamCompaction {
          */
         int compactWithoutScan(int n, int *odata, const int *idata) {
             timer().startCpuTimer();
-            // TODO
+            size_t p = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (idata[i] != 0)
+                {
+					odata[p++] = idata[i];
+                }
+            }
             timer().endCpuTimer();
-            return -1;
+            return p;
         }
 
         /**
@@ -41,10 +56,36 @@ namespace StreamCompaction {
          * @returns the number of elements remaining after compaction.
          */
         int compactWithScan(int n, int *odata, const int *idata) {
+            assert(n > 0);
+
+            std::vector<int> t(n);
+        	std::vector<int> s(n + 1);
+
             timer().startCpuTimer();
-            // TODO
+
+            for (int i = 0; i < n; i++)
+            {
+				t[i] = idata[i] != 0 ? 1 : 0;
+            }
+
+            // Inclusive scan starting at first index (to "shift" into exclusive scan)
+            const auto start = s.data() + 1;
+            start[0] = t[0];
+            for (int i = 1; i < n; i++)
+            {
+                start[i] = start[i - 1] + t[i];
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                if (t[i] == 1)
+                {
+					odata[s[i]] = idata[i];
+                }
+			}
+
             timer().endCpuTimer();
-            return -1;
+            return s[n];
         }
     }
 }
