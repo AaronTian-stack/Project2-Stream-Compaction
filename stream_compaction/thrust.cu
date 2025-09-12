@@ -30,6 +30,9 @@ namespace StreamCompaction {
 
             auto iter = thrust::device_ptr<int>(in);
             auto out_dp = thrust::device_ptr<int>(out);
+
+            cudaDeviceSynchronize();
+
             timer().startGpuTimer();
 
             thrust::exclusive_scan(iter, iter + n, out_dp);
