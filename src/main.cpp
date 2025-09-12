@@ -7,19 +7,32 @@
  */
 
 #include <cstdio>
+#include <cstdlib>
 #include <stream_compaction/cpu.h>
 #include <stream_compaction/naive.h>
 #include <stream_compaction/efficient.h>
 #include <stream_compaction/thrust.h>
 #include "testing_helpers.hpp"
 
-const int SIZE = 1 << 8; // feel free to change the size of array
-const int NPOT = SIZE - 3; // Non-Power-Of-Two
-int *a = new int[SIZE];
-int *b = new int[SIZE];
-int *c = new int[SIZE];
-
 int main(int argc, char* argv[]) {
+
+    int SIZE = 1 << 8;
+    if (argc > 1) 
+    {
+        SIZE = atoi(argv[1]);
+        if (SIZE <= 0) 
+        {
+            printf("Bad size: %s\n", argv[1]);
+            return 1;
+        }
+    }
+    
+    const int NPOT = SIZE - 3; // Non-Power-Of-Two
+    
+    int *a = new int[SIZE];
+    int *b = new int[SIZE];
+    int *c = new int[SIZE];
+    
     // Scan tests
 
     printf("\n");
@@ -147,7 +160,6 @@ int main(int argc, char* argv[]) {
     //printArray(count, c, true);
     printCmpLenResult(count, expectedNPOT, b, c);
 
-    system("pause"); // stop Win32 console from closing on exit
     delete[] a;
     delete[] b;
     delete[] c;
