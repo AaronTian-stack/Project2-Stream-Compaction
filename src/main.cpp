@@ -96,14 +96,14 @@ int main(int argc, char* argv[]) {
 
     zeroArray(SIZE, c);
     printDesc("work-efficient scan shared memory, power-of-two");
-    StreamCompaction::Efficient::scan_efficient(SIZE, c, a);
+    StreamCompaction::Efficient::scanEfficient(SIZE, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     //printArray(SIZE, c, true);
     printCmpResult(SIZE, b, c);
 
     zeroArray(SIZE, c);
     printDesc("work-efficient scan shared memory, non-power-of-two");
-    StreamCompaction::Efficient::scan_efficient(NPOT, c, a);
+    StreamCompaction::Efficient::scanEfficient(NPOT, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     //printArray(NPOT, c, true);
     printCmpResult(NPOT, b, c);

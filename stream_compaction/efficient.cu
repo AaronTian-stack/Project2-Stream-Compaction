@@ -364,7 +364,7 @@ namespace StreamCompaction {
             cudaFree(exclusiveScanResult);
         }
 
-        void scan_efficient(int n, int* odata, const int* idata)
+        void scanEfficient(int n, int* odata, const int* idata)
         {
             assert(n > 0);
 
