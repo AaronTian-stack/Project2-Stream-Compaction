@@ -38,7 +38,18 @@ namespace StreamCompaction {
         void scan(int n, int *odata, const int *idata) {
             assert(n > 0);
 
-            constexpr auto threads = 128;
+            // vidmem needs to be < 4 bytes * n * 2 buffers
+			// Otherwise there will be spilling (cudaMalloc wil; still succeed as long as the individual size is not too large)
+            size_t free_bytes;
+            size_t memory_needed = sizeof(int) * static_cast<size_t>(n) * 2;
+            cudaMemGetInfo(&free_bytes, nullptr);
+            if (free_bytes < memory_needed)
+            {
+                printf("GPU Memory: %.1fMB free, %.1fMB needed\n", free_bytes / (1024.0 * 1024.0), memory_needed / (1024.0 * 1024.0));
+                printf("%s\n", "Not enough memory, spilling may occur");
+            }
+
+            constexpr auto threads = 256;
             dim3 blockSize((n + threads - 1) / threads);
 
             int* d_in_data;

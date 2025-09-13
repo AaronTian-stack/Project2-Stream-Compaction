@@ -52,9 +52,12 @@ namespace StreamCompaction {
         }
 
         // d_in is last result
-        void performSweeps(dim3 blockSize, const int threads, const int n, const int padded_n, 
+        void performSweeps(const int n, const int padded_n, 
             int* d_in, int* d_out)
         {
+            constexpr auto threads = 256;
+            dim3 blockSize((padded_n + threads - 1) / threads);
+
             for (int d = 0; d < ilog2ceil(n); d++)
             {
                 const int stride = 1 << (d + 1);
@@ -67,7 +70,8 @@ namespace StreamCompaction {
             {
                 const int nodes = 1 << d;
                 const int stride = padded_n >> d;
-                downsweep<<<blockSize, threads>>>(nodes, stride, d_in, d_out);
+                int grid = (nodes + threads - 1) / threads;
+                downsweep<<<dim3(grid), threads>>>(nodes, stride, d_in, d_out);
                 std::swap(d_in, d_out);
             }
         }
@@ -77,9 +81,6 @@ namespace StreamCompaction {
          */
         void scan(int n, int *odata, const int *idata) {
             assert(n > 0);
-
-            constexpr auto threads = 128;
-            dim3 blockSize((n + threads - 1) / threads);
 
             // Round up to next power of two
 			const int padded_n = 1 << ilog2ceil(n);
@@ -96,7 +97,7 @@ namespace StreamCompaction {
 
             timer().startGpuTimer();
 
-            performSweeps(blockSize, threads, n, padded_n, d_in, d_out);
+            performSweeps(n, padded_n, d_in, d_out);
 
             timer().endGpuTimer();
 
@@ -125,7 +126,7 @@ namespace StreamCompaction {
             }
             if (d_tf[index] != 0)
             {
-				d_out[d_scan[index]] = d_in[index];
+                d_out[d_scan[index]] = d_in[index];
             }
         }
 
@@ -141,7 +142,7 @@ namespace StreamCompaction {
         int compact(int n, int *odata, const int *idata) {
             assert(n > 0);
 
-            constexpr auto threads = 128;
+            constexpr auto threads = 256;
             dim3 blockSize((n + threads - 1) / threads);
 
             // Round up to next power of two
@@ -152,6 +153,17 @@ namespace StreamCompaction {
             int* d_tf;
             int* d_tf_copy;
             int* d_scan;
+
+			// vidmem needs to be < 4 bytes * padded_n * 4 buffers
+			// Otherwise there will be spilling (cudaMalloc will still succeed as long as the individual size is not too large)
+            size_t free_bytes;
+            size_t memory_needed = sizeof(int) * static_cast<size_t>(n) * 4;
+            cudaMemGetInfo(&free_bytes, nullptr);
+            if (free_bytes < memory_needed)
+            {
+                printf("GPU Memory: %.1fMB free, %.1fMB needed\n", free_bytes / (1024.0 * 1024.0), memory_needed / (1024.0 * 1024.0));
+                printf("%s\n", "Not enough memory, spilling may occur");
+            }
 
             cudaMalloc(&d_in, padded_n * sizeof(int));
             cudaMalloc(&d_tf, padded_n * sizeof(int));
@@ -168,11 +180,10 @@ namespace StreamCompaction {
             // t/f
             trueFalse<<<blockSize, threads>>>(n, d_in, d_tf);
 
-            // Save original t/f
-            cudaMemcpy(d_tf_copy, d_tf, padded_n * sizeof(int), cudaMemcpyDefault);
+            cudaMemcpy(d_tf_copy, d_tf, n * sizeof(int), cudaMemcpyDefault);
 
             // Scan (d_tf is actually where scan gets stored)
-            performSweeps(blockSize, threads, n, padded_n, d_tf, d_scan);
+            performSweeps(n, padded_n, d_tf, d_scan);
 
             // Scatter
             // d_scan is free to use to store output
