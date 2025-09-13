@@ -312,7 +312,7 @@ namespace StreamCompaction {
 			d_out[index] = inclusive[index] - d_in[index];
         }
 
-		void scan_recurse(int d, int n, const int threads,
+		void scanRecurse(int d, int n, const int threads,
             int* d_in, int* d_out, const int logn, bool inclusive)
         {
 			assert(!(n & n - 1)); // n is power of two
@@ -324,12 +324,8 @@ namespace StreamCompaction {
             }
 
             const dim3 blockSize = dim3((n + threads - 1) / threads);
+            // Inclusive scans to combine
             scanEfficientSub<<<blockSize, threads, threads * sizeof(int)>>>(n, logn, d_in, d_out, true);
-
-            //cudaDeviceSynchronize();
-            //int* vv = new int[n] {};
-            //cudaMemcpy(vv, d_out, n * sizeof(int), cudaMemcpyDefault);
-            //cudaDeviceSynchronize();
 
 			size_t padded_block = 1 << ilog2ceil(blockSize.x);
 
@@ -348,31 +344,19 @@ namespace StreamCompaction {
             const dim3 extractSize = dim3((blockSize.x + threads - 1) / threads);
 			writeBlockSums<<<extractSize, threads>>>(blockSize.x, threads, d_out, sums);
 
-            //cudaDeviceSynchronize();
-            //int* blocvk = new int[padded_block] {};
-            //cudaMemcpy(blocvk, sums, padded_block * sizeof(int), cudaMemcpyDefault);
-            //cudaDeviceSynchronize();
-
             // Run exclusive scan on block sums
-            scan_recurse(d + 1, padded_block, threads, sums, scanResultOfSums, ilog2ceil(padded_block), false);
+            scanRecurse(d + 1, padded_block, threads, sums, scanResultOfSums, ilog2ceil(padded_block), false);
 
-            //int* tt = new int[padded_block]{};
-            //cudaMemcpy(tt, scanResultOfSums, sizeof(int) * padded_block, cudaMemcpyDefault);
+			const bool recurseMore = padded_block > threads;
 
-            cudaDeviceSynchronize();
-			if (d == 0)
+			if (recurseMore)
 			{
-                convertToExlusive << <blockSize, threads >> > (n, scanResultOfSums, sums, exclusiveScanResult);
+                const dim3 sumsGrid((padded_block + threads - 1) / threads);
+                convertToExlusive<<<sumsGrid, threads>>> (padded_block, scanResultOfSums, sums, exclusiveScanResult);
 			}
 
-            cudaDeviceSynchronize();
-
-            //cudaDeviceSynchronize();
-            //cudaMemcpy(tt, exclusiveScanResult, sizeof(int) * padded_block, cudaMemcpyDefault);
-
             // Add block increments
-
-			int* p = d == 0 ? exclusiveScanResult : scanResultOfSums;
+			int* p = recurseMore ? exclusiveScanResult : scanResultOfSums;
 			addBlockIncrements<<<blockSize, threads>>>(n, threads, p, d_out);
 
             cudaFree(sums);
@@ -401,16 +385,13 @@ namespace StreamCompaction {
 			timer().startGpuTimer();
 
             // Inclusive scan
-            scan_recurse(0, padded_n, threads, d_in, d_out, logn, true);
+            scanRecurse(0, padded_n, threads, d_in, d_out, logn, true);
 
             timer().endGpuTimer();
-
-            cudaDeviceSynchronize();
 
 			// Convert to exclusive
             odata[0] = 0;
             cudaMemcpy(odata + 1, d_out, (n - 1) * sizeof(int), cudaMemcpyDefault);
-			//cudaMemcpy(odata, d_out, n * sizeof(int), cudaMemcpyDefault);
 
             cudaFree(d_in);
             cudaFree(d_out);
