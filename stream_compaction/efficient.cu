@@ -244,35 +244,35 @@ namespace StreamCompaction {
 				__syncthreads();
             }
 
-            // Set last element to 0 based on valid elements in block
-            //int valid = (blockDim.x < (n - block_offset)) ? blockDim.x : (n - block_offset);
-            //if (index == valid - 1)
-            //{
-            //    temp[index] = 0;
-            //}
+        	// Set last element to 0 based on valid elements in block
+            int valid = (blockDim.x < (n - block_offset)) ? blockDim.x : (n - block_offset);
+            if (index == valid - 1)
+            {
+                temp[index] = 0;
+            }
 
-            // Downsweep
-			// Go in order because need to do larger strides first
-   //         for (int d = logn - 1; d >= 0; d--)
-   //         {
-   //             const int stride = 1 << (d + 1);
+        	// Downsweep
+        	// Go in order because need to do larger strides first
+            for (int d = logn - 1; d >= 0; d--)
+            {
+                const int stride = 1 << (d + 1);
 
-   //             // Stride still power of two so can use &
-			//	// Check if end of group
-   //             if ((index & stride - 1) == stride - 1)
-   //             {
-   //                 const int leftChild = index - stride / 2;
-			//		const int t = temp[leftChild];
-			//		temp[leftChild] = temp[index];
-			//		temp[index] += t;
-   //             }
-   //             __syncthreads();
-   //         }
-   //         if (inclusive)
-   //         {
-   //             temp[index] += d_in[globalIndex];
-			//}
-            
+                // Stride still power of two so can use &
+				// Check if end of group
+                if ((index & stride - 1) == stride - 1)
+                {
+                    const int leftChild = index - stride / 2;
+					const int t = temp[leftChild];
+					temp[leftChild] = temp[index];
+					temp[index] += t;
+                }
+                __syncthreads();
+            }
+            if (inclusive)
+            {
+                temp[index] += d_in[globalIndex];
+			}
+            __syncthreads();
 			d_out[globalIndex] = temp[index];
 			// Do combine step in another kernel
         }
@@ -327,10 +327,11 @@ namespace StreamCompaction {
             // Run exclusive scan on block sums
             scan_recurse(blockSize.x, threads, sums, scanResult, ilog2ceil(blockSize.x), false);
 
+            cudaDeviceSynchronize();
+
             // Add block increments
 			add_block_increments<<<blockSize, threads>>>(n, scanResult, d_out);
 
-            cudaDeviceSynchronize();
 
             cudaFree(sums);
             cudaFree(scanResult);
@@ -340,11 +341,11 @@ namespace StreamCompaction {
         {
             assert(n > 0);
 
-            const int padded_n = 1 << ilog2ceil(n);
+			const auto logn = ilog2ceil(n);
+            const int padded_n = 1 << logn;
             assert(padded_n >= n);
 
             constexpr auto threads = 128;
-			//const dim3 blockSize = dim3((padded_n + threads - 1) / threads);
 
             int* d_in;
             int* d_out;
@@ -356,19 +357,15 @@ namespace StreamCompaction {
 
 			timer().startGpuTimer();
 
-            {
-                const dim3 blockSize = dim3((padded_n + threads - 1) / threads);
-                scan_efficient_sub << <blockSize, threads, threads * sizeof(int) >> > (n, ilog2ceil(padded_n) , d_in, d_out, false);
-            }
             // Inclusive scan
-            //scan_recurse(padded_n, threads, d_in, d_out, logn, true);
+            scan_recurse(padded_n, threads, d_in, d_out, logn, true);
 
             timer().endGpuTimer();
 
+            cudaDeviceSynchronize();
 			// Convert to exclusive
-            //cudaMemset(odata, 0, sizeof(int));
-            //cudaMemcpy(odata + 1, d_out, (n - 1) * sizeof(int), cudaMemcpyDefault);
-			cudaMemcpy(odata, d_out, n * sizeof(int), cudaMemcpyDefault);
+            odata[0] = 0;
+            cudaMemcpy(odata + 1, d_out, (n - 1) * sizeof(int), cudaMemcpyDefault);
 
             cudaFree(d_in);
             cudaFree(d_out);
