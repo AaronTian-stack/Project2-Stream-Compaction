@@ -220,7 +220,7 @@ namespace StreamCompaction {
             }
 
             // Do scan on subarray in shared memory
-			// Num elements should be equal to blockDim.x in kernel call
+			// Num elements should be equal to threads in kernel call
             extern __shared__ int temp[];
 
             // Load into shared memory
@@ -363,9 +363,10 @@ namespace StreamCompaction {
             timer().endGpuTimer();
 
             cudaDeviceSynchronize();
+
 			// Convert to exclusive
             odata[0] = 0;
-            cudaMemcpy(odata + 1, d_out, (n - 1) * sizeof(int), cudaMemcpyDefault);
+            cudaMemcpy(odata + 1, d_out, (padded_n - 1) * sizeof(int), cudaMemcpyDefault);
 
             cudaFree(d_in);
             cudaFree(d_out);
