@@ -208,23 +208,20 @@ namespace StreamCompaction {
             return answer;
         }
 
-        __global__ void scan_efficient_sub(int n, int logn, int* d_in, int* d_out, bool inclusive)
+        __global__ void scanEfficientSub(int n, int logn, int* d_in, int* d_out, bool inclusive)
         {
             const int index = threadIdx.x; // Within block
             const int block_offset = blockDim.x * blockIdx.x;
 
 			const int globalIndex = index + block_offset;
-            if (globalIndex >= n)
-            {
-                return;
-            }
 
             // Do scan on subarray in shared memory
 			// Num elements should be equal to threads in kernel call
             extern __shared__ int temp[];
 
             // Load into shared memory
-			temp[index] = d_in[globalIndex];
+			int value = (globalIndex < n) ? d_in[globalIndex] : 0;
+            temp[index] = value;
 
             __syncthreads();
 
@@ -251,6 +248,8 @@ namespace StreamCompaction {
                 temp[index] = 0;
             }
 
+            __syncthreads();
+
         	// Downsweep
         	// Go in order because need to do larger strides first
             for (int d = logn - 1; d >= 0; d--)
@@ -259,7 +258,7 @@ namespace StreamCompaction {
 
                 // Stride still power of two so can use &
 				// Check if end of group
-                if ((index & stride - 1) == stride - 1)
+                if ((index & (stride - 1)) == stride - 1)
                 {
                     const int leftChild = index - stride / 2;
 					const int t = temp[leftChild];
@@ -273,11 +272,14 @@ namespace StreamCompaction {
                 temp[index] += d_in[globalIndex];
 			}
             __syncthreads();
-			d_out[globalIndex] = temp[index];
+			if (globalIndex < n)
+			{
+                d_out[globalIndex] = temp[index];
+			}
 			// Do combine step in another kernel
         }
 
-        __global__ void write_block_sums(int n, int blockSize, int* d_in, int* d_out)
+        __global__ void writeBlockSums(int n, int blockSize, int* d_in, int* d_out)
         {
 			const int thread = threadIdx.x + blockIdx.x * blockDim.x;
             if (thread >= n)
@@ -288,7 +290,7 @@ namespace StreamCompaction {
 			d_out[thread] = d_in[globalIndex];
 		}
 
-        __global__ void add_block_increments(int n, int* d_in, int* d_out)
+        __global__ void addBlockIncrements(int n, int blockSize, int* d_in, int* d_out)
         {
             const int index = threadIdx.x + blockIdx.x * blockDim.x;
             if (index >= n)
@@ -296,45 +298,86 @@ namespace StreamCompaction {
                 return;
             }
 
-            const int blockIndex = index / blockDim.x;
+            const int blockIndex = index / blockSize;
             d_out[index] += d_in[blockIndex];
         }
 
-		void scan_recurse(int n, const int threads,
+        __global__ void convertToExlusive(int n, int* inclusive, const int* d_in, int* d_out)
+        {
+            const int index = threadIdx.x + blockIdx.x * blockDim.x;
+            if (index >= n)
+            {
+                return;
+            }
+			d_out[index] = inclusive[index] - d_in[index];
+        }
+
+		void scan_recurse(int d, int n, const int threads,
             int* d_in, int* d_out, const int logn, bool inclusive)
         {
 			assert(!(n & n - 1)); // n is power of two
             // Base case
             if (n <= threads)
             {
-                scan_efficient_sub<<<1, threads, threads * sizeof(int)>>>(n, logn, d_in, d_out, inclusive);
+                scanEfficientSub<<<1, threads, threads * sizeof(int)>>>(n, logn, d_in, d_out, inclusive);
                 return;
             }
 
             const dim3 blockSize = dim3((n + threads - 1) / threads);
-            scan_efficient_sub<<<blockSize, threads, threads * sizeof(int)>>>(n, logn, d_in, d_out, inclusive);
+            scanEfficientSub<<<blockSize, threads, threads * sizeof(int)>>>(n, logn, d_in, d_out, true);
+
+            //cudaDeviceSynchronize();
+            //int* vv = new int[n] {};
+            //cudaMemcpy(vv, d_out, n * sizeof(int), cudaMemcpyDefault);
+            //cudaDeviceSynchronize();
+
+			size_t padded_block = 1 << ilog2ceil(blockSize.x);
 
             int* sums;
-            cudaMalloc(&sums, blockSize.x * sizeof(int));
-            int* scanResult;
-            cudaMalloc(&scanResult, blockSize.x * sizeof(int));
+            cudaMalloc(&sums, padded_block * sizeof(int));
+            int* scanResultOfSums;
+            cudaMalloc(&scanResultOfSums, padded_block * sizeof(int));
+            int* exclusiveScanResult;
+			cudaMalloc(&exclusiveScanResult, padded_block * sizeof(int));
+
+            cudaMemset(sums, 0, padded_block * sizeof(int));
+            cudaMemset(scanResultOfSums, 0, padded_block * sizeof(int));
 
             // Extract block sums
 			// One sum per block
             const dim3 extractSize = dim3((blockSize.x + threads - 1) / threads);
-			write_block_sums<<<extractSize, threads>>>(blockSize.x, threads, d_out, sums);
+			writeBlockSums<<<extractSize, threads>>>(blockSize.x, threads, d_out, sums);
+
+            //cudaDeviceSynchronize();
+            //int* blocvk = new int[padded_block] {};
+            //cudaMemcpy(blocvk, sums, padded_block * sizeof(int), cudaMemcpyDefault);
+            //cudaDeviceSynchronize();
 
             // Run exclusive scan on block sums
-            scan_recurse(blockSize.x, threads, sums, scanResult, ilog2ceil(blockSize.x), false);
+            scan_recurse(d + 1, padded_block, threads, sums, scanResultOfSums, ilog2ceil(padded_block), false);
+
+            //int* tt = new int[padded_block]{};
+            //cudaMemcpy(tt, scanResultOfSums, sizeof(int) * padded_block, cudaMemcpyDefault);
+
+            cudaDeviceSynchronize();
+			if (d == 0)
+			{
+                convertToExlusive << <blockSize, threads >> > (n, scanResultOfSums, sums, exclusiveScanResult);
+			}
 
             cudaDeviceSynchronize();
 
-            // Add block increments
-			add_block_increments<<<blockSize, threads>>>(n, scanResult, d_out);
+            //cudaDeviceSynchronize();
+            //cudaMemcpy(tt, exclusiveScanResult, sizeof(int) * padded_block, cudaMemcpyDefault);
 
+            // Add block increments
+
+			int* p = d == 0 ? exclusiveScanResult : scanResultOfSums;
+			addBlockIncrements<<<blockSize, threads>>>(n, threads, p, d_out);
 
             cudaFree(sums);
-            cudaFree(scanResult);
+            cudaFree(scanResultOfSums);
+            cudaFree(exclusiveScanResult);
         }
 
         void scan_efficient(int n, int* odata, const int* idata)
@@ -345,7 +388,7 @@ namespace StreamCompaction {
             const int padded_n = 1 << logn;
             assert(padded_n >= n);
 
-            constexpr auto threads = 128;
+            constexpr auto threads = 256;
 
             int* d_in;
             int* d_out;
@@ -358,7 +401,7 @@ namespace StreamCompaction {
 			timer().startGpuTimer();
 
             // Inclusive scan
-            scan_recurse(padded_n, threads, d_in, d_out, logn, true);
+            scan_recurse(0, padded_n, threads, d_in, d_out, logn, true);
 
             timer().endGpuTimer();
 
@@ -366,7 +409,8 @@ namespace StreamCompaction {
 
 			// Convert to exclusive
             odata[0] = 0;
-            cudaMemcpy(odata + 1, d_out, (padded_n - 1) * sizeof(int), cudaMemcpyDefault);
+            cudaMemcpy(odata + 1, d_out, (n - 1) * sizeof(int), cudaMemcpyDefault);
+			//cudaMemcpy(odata, d_out, n * sizeof(int), cudaMemcpyDefault);
 
             cudaFree(d_in);
             cudaFree(d_out);
