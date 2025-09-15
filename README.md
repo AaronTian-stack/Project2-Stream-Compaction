@@ -96,7 +96,7 @@ Looking at runtime across a couple different block sizes there does not seem to 
 
 Looking at the runtimes for scans the runtime does grow with a larger number of input elements. The simple CPU implementation grows linearly in time as expected. Both naive and work-efficient GPU scans are faster than the CPU implementation, however the work-efficient scan is about the same as the naive scan and is actually slower for larger input sizes despite doing less arithmetic operations. I believe this is due to the overhead of launching more kernels.
 
-The optimizations in my shared memory work-efficient scan makes a big difference and is much closer to the golden standard of Thrust's implementation. Notably in addition to the significantly reduced runtime, the shared memory implementation also scales better with larger input sizes, similar to Thrust.
+The optimizations in my shared memory work-efficient scan makes a big difference and is much closer to the golden standard of Thrust's implementation. Notably in addition to the significantly reduced runtime, the shared memory implementation also scales better with larger input sizes compared to the regular global memory only work-efficient scan, similar to Thrust.
 
 ![shared](img/shared_delta.png)
 
